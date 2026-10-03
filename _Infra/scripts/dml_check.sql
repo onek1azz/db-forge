@@ -2,9 +2,10 @@
 -- считаем колво пачек у каждого юзера
 select
 	u.name as "Пользователь",
-	count(p.id) as "Количество пачек"
+	count(pr.id) as "Количество измерений"
 from users u
 left join packs p on p.user_id = u.id
+left join parameters pr on pr.pack_id = p.id
 group by u.id, u.name
 order by u.id;
 
@@ -21,8 +22,8 @@ where pr.id is null;
 select
 	p.id as "Код пачки",
 	p.name as "Номер пачки",
-	count(pr.id) as "Количество параметров",
-	case when count(pr.id) = 5 then 'Да' else 'Нет' end as "Полный набор"
+	coalesce(count(pr.id), 0) as "Количество параметров",
+	case when coalesce(count(pr.id), 0) = 5 then 'Да' else 'Нет' end as "Полный набор"
 from packs p
 left join parameters pr on pr.pack_id = p.id
 group by p.id, p.name
