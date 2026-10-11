@@ -116,7 +116,7 @@ begin
 		insert into parametrs (pack_id, parameter_type_id, value) values
 			(1, 1, 100), (1, 2, 15), (1, 3, 750), (1, 4, 0), (1, 5, 0),
 			(2, 1, 100), (2, 2, 12), (2, 3, 760), (2, 4, 20), (2, 6, 45);
-		-- таблица 1: виртуальная поправка температуры delta_tv по диапазону t0
+
 		insert into temperature_correction (t0_from, t0_to, delta_tv) values
 			(null, 0, 0), (0, 5, 0.5), (10, 15, 1), (20, 20, 1.5),
 			(25, 25, 2), (30, 30, 3.5), (40, 40, 4.5);
