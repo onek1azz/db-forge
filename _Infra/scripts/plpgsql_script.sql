@@ -76,17 +76,24 @@ begin
 		create sequence seq_temperature_correction;
 		alter table temperature_correction alter column id set default nextval('seq_temperature_correction');
 
+		comment on table positions is 'справочник должностей сотрудников';
+		comment on table eq_types is 'справочник типов оборудования';
+		comment on table users is 'сотрудники метеопоста';
+		comment on table packs is 'пачки измерений';
+		comment on table parametrs is 'измерения (значения параметров внутри пачки)';
+		comment on table base_units is 'справочник величин';
+		comment on table units is 'справочник единиц измерения';
+		comment on table parameter_types is 'справочник типов параметров';
+		comment on table temperature_correction is 'поправка температуры delta tv по диапазону t0';
+
 	exception when others then
 		raise notice 'ошибка в транзакции 1: %', sqlerrm;
 		raise;
 	end;
 
 	commit;
-end $$;
 
 
-do $$
-begin
 	begin
 		insert into positions (name) values
 			('оператор метеопоста'), ('начальник метеопоста'), ('техник');
@@ -109,7 +116,7 @@ begin
 		insert into parametrs (pack_id, parameter_type_id, value) values
 			(1, 1, 100), (1, 2, 15), (1, 3, 750), (1, 4, 0), (1, 5, 0),
 			(2, 1, 100), (2, 2, 12), (2, 3, 760), (2, 4, 20), (2, 6, 45);
-
+		-- таблица 1: виртуальная поправка температуры delta_tv по диапазону t0
 		insert into temperature_correction (t0_from, t0_to, delta_tv) values
 			(null, 0, 0), (0, 5, 0.5), (10, 15, 1), (20, 20, 1.5),
 			(25, 25, 2), (30, 30, 3.5), (40, 40, 4.5);
@@ -120,11 +127,8 @@ begin
 	end;
 
 	commit;
-end $$;
 
 
-do $$
-begin
 	begin
 		-- ключи и уникальность
 		alter table positions add primary key (id);
