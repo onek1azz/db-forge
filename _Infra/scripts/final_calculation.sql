@@ -342,6 +342,7 @@ begin
 
 		alter table calc_correction_types add column code varchar(50);
 		alter table calc_correction_types add column header_id integer;
+		alter table calc_correction_types add column parameter_type_id integer;
 		alter table calc_correction_types rename column measurment_equipment_id to eq_type_id;
 
 		update calc_correction_types t
@@ -370,10 +371,18 @@ begin
 
 		alter table calc_correction_types drop column header_values;
 
+		-- вход табл 3, у ДМК скорость ветра, у ВР дальность сноса пуль
+		update calc_correction_types t
+		set parameter_type_id = pt.id
+		from parameter_types pt
+		where (t.code = 'wind_speed_dmk' and pt.code = 'wind_speed')
+			or (t.code = 'wind_speed_vr' and pt.code = 'drift_range');
+
 		comment on table calc_correction_types is 'Справочник типов таблиц корректировок';
 		comment on column calc_correction_types.code is 'Код типа таблицы';
 		comment on column calc_correction_types.header_id is 'Код заголовка таблицы';
 		comment on column calc_correction_types.eq_type_id is 'Тип оборудования';
+		comment on column calc_correction_types.parameter_type_id is 'Параметр, значение которого является входом таблицы';
 
 	exception when others then
 		raise notice 'ошибка в транзакции 7 (заголовки): %', sqlerrm;
@@ -396,6 +405,8 @@ begin
 			foreign key (eq_type_id) references eq_types (id);
 		alter table calc_correction_types add constraint fk_calc_correction_types_header
 			foreign key (header_id) references calc_correction_headers (id);
+		alter table calc_correction_types add constraint fk_calc_correction_types_parameter_type
+			foreign key (parameter_type_id) references parameter_types (id);
 
 		alter table calc_correction alter column row_values set not null;
 		alter table calc_correction add constraint uq_calc_correction unique (height_id, type_id);
@@ -416,6 +427,26 @@ begin
 
 
 	begin
+		-- константы расчета
+		insert into meteo_constants (code, value, description)
+		values
+			('temperature_max_column', 50, 'Последний столбец таблицы 2, отклонения больше раскладываются на него и остаток'),
+			('direction_divisions', 60, 'Число больших делений угломера в окружности');
+
+		-- строка результата расчета по высоте
+		create type meteo_average_row as (
+			height integer,
+			temperature_deviation integer,
+			wind_direction integer,
+			wind_speed integer
+		);
+
+		comment on type meteo_average_row is 'Результат расчета по стандартной высоте';
+		comment on column meteo_average_row.height is 'Стандартная высота, м';
+		comment on column meteo_average_row.temperature_deviation is 'Среднее отклонение температуры, град (со знаком)';
+		comment on column meteo_average_row.wind_direction is 'Направление среднего ветра, большие деления угломера';
+		comment on column meteo_average_row.wind_speed is 'Скорость среднего ветра, м/с';
+
 		create or replace function get_correction_value(p_height_id integer, p_type_id integer, p_argument numeric)
 		returns numeric
 		language plpgsql
@@ -488,6 +519,7 @@ begin
 			v_column integer;
 			v_value numeric;
 			v_sum numeric := 0;
+			v_max_column integer := cast(get_meteo_constant('temperature_max_column') as integer);
 		begin
 			if p_deviation = 0 then
 				return 0;
@@ -498,9 +530,9 @@ begin
 			from calc_correction_types t
 			where t.code = case when p_deviation < 0 then 'temperature_negative' else 'temperature_positive' end;
 
-			--  десятки больше 50 раскладываются на столбец 50 и остаток
-			if v_tens > 50 then
-				v_columns := array[50, v_tens - 50];
+			--  десятки больше последнего столбца раскладываются на него и остаток
+			if v_tens > v_max_column then
+				v_columns := array[v_max_column, v_tens - v_max_column];
 			elsif v_tens > 0 then
 				v_columns := array[v_tens];
 			end if;
@@ -524,28 +556,29 @@ begin
 		end;
 		$func$;
 
-		create or replace function calc_meteo_average(p_parameters parameter_list, p_eq_type_id integer)
-		returns table (
-			height integer,
-			temperature_deviation text,
-			wind_direction text,
-			wind_speed integer
+		-- расчет по каждой стандарт высоте, результат возвр в параметре p_result
+		create or replace procedure calc_meteo_average(
+			p_parameters parameter_list,
+			p_eq_type_id integer,
+			inout p_result meteo_average_row[]
 		)
 		language plpgsql
-		as $func$
+		as $proc$
 		declare
 			v_errors text;
 			v_deviation integer;
-			v_dmk_id integer;
 			v_argument numeric;
 			v_speed_type_id integer;
 			v_direction_type_id integer;
 			v_threshold integer;
+			v_divisions integer := cast(get_meteo_constant('direction_divisions') as integer);
 			v_height record;
-			v_total integer;
+			v_row meteo_average_row;
 			v_speed numeric;
 			v_increment integer;
 		begin
+			p_result := array[]::meteo_average_row[];
+
 			v_errors := check_parameters(cast(row(
 				p_eq_type_id, p_parameters.height, p_parameters.temperature, p_parameters.pressure,
 				p_parameters.wind_direction, p_parameters.wind_speed, p_parameters.drift_range
@@ -555,22 +588,19 @@ begin
 				raise exception 'Некорректные входные параметры: %', v_errors;
 			end if;
 
-		 	-- отклонение приземной виртуальной темпы от табличного знач
-			
+			-- отклонение приземной виртуальной темпы от табличного знач
 			v_deviation := cast(round(
 				p_parameters.temperature
 				+ interpolate(p_parameters.temperature, get_interpolation_points(p_parameters.temperature))
 				- get_meteo_constant('table_temperature')
 			) as integer);
 
-			-- тут вход таблицы 3, у дмк скорость ветра, а у вр дальность сноса пуль
-			select id into v_dmk_id from eq_types where name = 'ДМК';
-			v_argument := case when p_eq_type_id = v_dmk_id then p_parameters.wind_speed else p_parameters.drift_range end;
-
-			select t.id
-			into v_speed_type_id
+			-- табл скорости ветра для типа оборуд и ее вход, параметр берется из справочника типов, знач из входных параметров
+			select t.id, cast(to_jsonb(p_parameters) ->> pt.code as numeric)
+			into v_speed_type_id, v_argument
 			from calc_correction_types t
 			inner join calc_correction_types p on p.id = t.parent_id
+			inner join parameter_types pt on pt.id = t.parameter_type_id
 			where p.code = 'wind_speed' and t.eq_type_id = p_eq_type_id;
 
 			select t.id
@@ -580,7 +610,6 @@ begin
 			where p.code = 'wind_direction' and t.eq_type_id = p_eq_type_id;
 
 			-- меньше 1го столбца таблицы 3 скорость сред ветра = 0
-			
 			select h.header_values[1]
 			into v_threshold
 			from calc_correction_types t
@@ -592,18 +621,12 @@ begin
 				from calc_correction_heights h
 				order by h.height
 			loop
-				height := v_height.height;
-
-				v_total := calc_temperature_average_deviation(v_height.id, v_deviation);
-				if v_total < 0 then
-					temperature_deviation := cast(cast(get_meteo_constant('negative_temperature_base') as integer) + abs(v_total) as text);
-				else
-					temperature_deviation := lpad(cast(v_total as text), 2, '0');
-				end if;
+				v_row.height := v_height.height;
+				v_row.temperature_deviation := calc_temperature_average_deviation(v_height.id, v_deviation);
 
 				if v_argument < v_threshold then
-					wind_direction := '00';
-					wind_speed := 0;
+					v_row.wind_direction := 0;
+					v_row.wind_speed := 0;
 				else
 					v_speed := get_correction_value(v_height.id, v_speed_type_id, v_argument);
 
@@ -612,19 +635,64 @@ begin
 					from calc_correction c
 					where c.height_id = v_height.id and c.type_id = v_direction_type_id;
 
-					wind_speed := cast(round(v_speed) as integer);
-					wind_direction := lpad(cast(mod(cast(p_parameters.wind_direction as integer) + v_increment, 60) as text), 2, '0');
+					v_row.wind_speed := cast(round(v_speed) as integer);
+					v_row.wind_direction := mod(cast(p_parameters.wind_direction as integer) + v_increment, v_divisions);
 				end if;
 
-				return next;
+				p_result := p_result || v_row;
 			end loop;
+		end;
+		$proc$;
+
+
+		create or replace function meteo_height(p_height integer)
+		returns text
+		language plpgsql
+		as $func$
+		begin
+			return lpad(cast(p_height / 100 as text), 2, '0');
+		end;
+		$func$;
+
+		create or replace function meteo_tt(p_deviation integer)
+		returns text
+		language plpgsql
+		as $func$
+		begin
+			if p_deviation < 0 then
+				return cast(cast(get_meteo_constant('negative_temperature_base') as integer) + abs(p_deviation) as text);
+			end if;
+
+			return lpad(cast(p_deviation as text), 2, '0');
+		end;
+		$func$;
+
+		create or replace function meteo_nn(p_direction integer)
+		returns text
+		language plpgsql
+		as $func$
+		begin
+			return lpad(cast(p_direction as text), 2, '0');
+		end;
+		$func$;
+
+		create or replace function meteo_cc(p_speed integer)
+		returns text
+		language plpgsql
+		as $func$
+		begin
+			return lpad(cast(p_speed as text), 2, '0');
 		end;
 		$func$;
 
 
 		comment on function get_correction_value(integer, integer, numeric) is 'Значение из таблицы корректировок по высоте, типу таблицы и входу';
 		comment on function calc_temperature_average_deviation(integer, integer) is 'Среднее отклонение температуры на высоте по таблице 2';
-		comment on function calc_meteo_average(parameter_list, integer) is 'Расчет метео приближенный: ТТ, НН и СС по каждой стандартной высоте';
+		comment on procedure calc_meteo_average(parameter_list, integer, meteo_average_row[]) is 'Расчет метео приближенный по каждой стандартной высоте';
+		comment on function meteo_height(integer) is 'Метео приближенный: строка высоты (сотни метров)';
+		comment on function meteo_tt(integer) is 'Метео приближенный: ТТ (отклонение температуры)';
+		comment on function meteo_nn(integer) is 'Метео приближенный: НН (направление среднего ветра)';
+		comment on function meteo_cc(integer) is 'Метео приближенный: СС (скорость среднего ветра)';
 
 	exception when others then
 		raise notice 'ошибка в транзакции 9 (расчет): %', sqlerrm;
