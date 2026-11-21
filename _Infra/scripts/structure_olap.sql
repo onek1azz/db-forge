@@ -9,16 +9,18 @@ begin
 		(
 			id bigint not null primary key default nextval('public.seq_dim_ranges'),
 			external_id bigint not null,
+			group_external_id bigint,
+			short_name text,
 			name text not null,
-			factor float,
 			date_add timestamp not null default now()
 		);
 
 		comment on table dim_ranges is 'Единицы измерения';
 		comment on column dim_ranges.id is 'Внутренний код';
 		comment on column dim_ranges.external_id is 'Код в исходной базе';
+		comment on column dim_ranges.group_external_id is 'Код группы единиц в исходной базе (длина, площадь, объем, масса и тд)';
+		comment on column dim_ranges.short_name is 'Краткое обозначение';
 		comment on column dim_ranges.name is 'Название';
-		comment on column dim_ranges.factor is 'Коэффициент (размер порции)';
 		comment on column dim_ranges.date_add is 'Дата добавления';
 
 
@@ -66,14 +68,12 @@ begin
 
 		create sequence seq_dim_products;
 		create table dim_products
-		
+
 		(
 			id bigint not null primary key default nextval('public.seq_dim_products'),
 			external_id bigint not null,
 			code text,
 			name text not null,
-			category_id bigint,
-			range_id bigint,
 			date_add timestamp not null default now()
 		);
 
@@ -82,13 +82,9 @@ begin
 		comment on column dim_products.external_id is 'Код в исходной базе';
 		comment on column dim_products.code is 'Внешний код товара (по нему товар указан в журнале кассы)';
 		comment on column dim_products.name is 'Название';
-		comment on column dim_products.category_id is 'Внутренний код категории';
-		comment on column dim_products.range_id is 'Внутренний код единицы измерения';
 		comment on column dim_products.date_add is 'Дата добавления';
 
 		alter table dim_products add constraint uq_dim_products_external_id unique (external_id);
-		alter table dim_products add foreign key (category_id) references dim_categories (id);
-		alter table dim_products add foreign key (range_id) references dim_ranges (id);
 
 	exception when others then
 		raise notice 'ошибка при создании товаров: %', sqlerrm;

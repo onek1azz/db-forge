@@ -1,11 +1,12 @@
--- 1. ед измерения
-select 'insert into dim_ranges (external_id, name, factor) values ('
-       + cast(id as varchar(20)) + ', '''
-       + replace(isnull(sizeid, ''), '''', '''''') + ''', '
-       + isnull(cast(cast(portionrate as decimal(18, 4)) as varchar(40)), 'null') + ');' as [sql]
+-- 1. ед измерения из классификатора
+select 'insert into dim_ranges (external_id, group_external_id, short_name, name) values ('
+       + cast(ID as varchar(20)) + ', '
+       + isnull(cast(GroupID as varchar(20)), 'null') + ', '
+       + isnull('''' + replace(ShortName, '''', '''''') + '''', 'null') + ', '''
+       + replace(isnull(Description, ''), '''', '''''') + ''');' as [sql]
 
-from [size]
-order by id;
+from [Front].[dbo].[bm_classifierSizes]
+order by GroupID, ID;
 
 -- 2. категории товаров, сначала корневые потом вложенные, чтоб родитель уже был вставлен
 with tree as (
@@ -28,13 +29,11 @@ from tree
 order by lvl, id;
 
 
--- 3. товары, категория и ед измерения ищутся по external_id
-select 'insert into dim_products (external_id, code, name, category_id, range_id) values ('
+-- 3. товары
+select 'insert into dim_products (external_id, code, name) values ('
        + cast(id as varchar(20)) + ', '
        + isnull('''' + replace(productid, '''', '''''') + '''', 'null') + ', '''
-       + replace(isnull(description, ''), '''', '''''') + ''', '
-       + '(select id from dim_categories where external_id = ' + isnull(cast(CategoryID as varchar(20)), 'null') + '), '
-       + '(select id from dim_ranges where external_id = ' + isnull(cast(SizeID as varchar(20)), 'null') + '));' as [sql]
+       + replace(isnull(description, ''), '''', '''''') + ''');' as [sql]
 from product
 order by id;
 
